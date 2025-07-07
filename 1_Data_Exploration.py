@@ -18,79 +18,76 @@
 # COMMAND ----------
 
 # DBTITLE 1,Install Required Libraries
-# MAGIC %pip install btyd==0.1a1 numba==0.57.1 lifetimes==0.11.3 openpyxl==3.1.2
+# MAGIC %pip install ucimlrepo
 # MAGIC dbutils.library.restartPython()
 
 # COMMAND ----------
 
 # DBTITLE 1,Install Required Libraries
 import pandas as pd
-import numpy as np
-from datetime import timedelta
+from ucimlrepo import fetch_ucirepo 
+# import numpy as np
+#from datetime import timedelta
 
-import btyd
-from btyd.fitters.beta_geo_fitter import BetaGeoFitter
-from btyd import GammaGammaFitter
+# import btyd
+# from btyd.fitters.beta_geo_fitter import BetaGeoFitter
+# from btyd import GammaGammaFitter
 
-from btyd.plotting import plot_calibration_purchases_vs_holdout_purchases
-from btyd.plotting import plot_probability_alive_matrix
-from btyd.plotting import plot_frequency_recency_matrix
+# from btyd.plotting import plot_calibration_purchases_vs_holdout_purchases
+# from btyd.plotting import plot_probability_alive_matrix
+# from btyd.plotting import plot_frequency_recency_matrix
+#import pymc_marketing
 
-import matplotlib.pyplot as plt
+# import matplotlib.pyplot as plt
 
 import pyspark.sql.functions as fn
-from pyspark.sql.types import *
+# from pyspark.sql.types import *
 
-import mlflow.pyfunc
-import mlflow
+# import mlflow.pyfunc
+# import mlflow
 
 # COMMAND ----------
 
 # MAGIC %md ##Step 1: Access the Data
 # MAGIC
-# MAGIC The dataset we will use for this exercise is the [Online Retail Data Set](http://archive.ics.uci.edu/ml/datasets/Online+Retail) available from the UCI Machine Learning Repository:
+# MAGIC The dataset we will use for this exercise is the [Online Retail Data Set](https://archive.ics.uci.edu/dataset/352/online+retail) available from the UCI Machine Learning Repository:
 
 # COMMAND ----------
 
 # DBTITLE 1,Download Data Set
-# MAGIC %sh 
-# MAGIC
-# MAGIC rm -rf /dbfs/tmp/clv/online_retail  # drop any old copies of data
-# MAGIC mkdir -p /dbfs/tmp/clv/online_retail # ensure destination folder exists
-# MAGIC
-# MAGIC # download data to destination folder
-# MAGIC wget -N http://archive.ics.uci.edu/ml/machine-learning-databases/00352/Online%20Retail.xlsx -P /dbfs/tmp/clv/online_retail
+# fetch dataset 
+online_retail = fetch_ucirepo(id=352) 
+
+# saving the data to a pandas dataframe
+orders_pd = online_retail.data.original
+
+#previewing the data
+orders_pd.head(10)
 
 # COMMAND ----------
 
-# MAGIC %md The dataset is made available as an Excel spreadsheet.  We can read this data to a pandas dataframe as follows:
-
-# COMMAND ----------
-
-# DBTITLE 1,Read Data
-xlsx_filename = "/dbfs/tmp/clv/online_retail/Online Retail.xlsx"
-
-# schema of the excel spreadsheet data range
+# DBTITLE 1,Update Schema
+#desired schema
 orders_schema = {
   'InvoiceNo':str,
   'StockCode':str,
   'Description':str,
-  'Quantity':np.int64,
-  'InvoiceDate':np.datetime64,
-  'UnitPrice':np.float64,
+  'Quantity':int,
+  'InvoiceDate':'datetime64[ns]',
+  'UnitPrice':float,
   'CustomerID':str,
   'Country':str  
   }
 
-# read spreadsheet to pandas dataframe
-# the xlrd library must be installed for this step to work 
-orders_pd = pd.read_excel(
-  xlsx_filename, 
-  sheet_name='Online Retail',
-  header=0, # first row is header
-  dtype=orders_schema
-  )
+# convert pandas dataframe to correct schema
+orders_pd = orders_pd.astype(orders_schema)
 
+# print schema of orders dataframe
+orders_pd.info()
+
+# COMMAND ----------
+
+# DBTITLE 1,Read Data
 # calculate sales amount as quantity * unit price
 orders_pd['SalesAmount'] = orders_pd['Quantity'] * orders_pd['UnitPrice']
 
@@ -188,7 +185,7 @@ display(spark.table('orders'))
 
 # COMMAND ----------
 
-# MAGIC %md Examining the daily transaction activity in our dataset, we can see the first transaction occurs December 1, 2010 and the last is on December 9, 2011 making this a dataset that's a little more than 1 year in duration. The daily transaction count shows there is quite a bit of volatility in daily activity for this online retailer. We can smooth this out a bit by summarizing activity by month. It's important to keep in mind that December 2011 only has 9 days worth of data which will make that 
+# MAGIC %md Examining the daily transaction activity in our dataset, we can see the first transaction occurs December 1, 2010 and the last is on December 9, 2011 making this a dataset that's a little more than 1 year in duration. The daily transaction count shows there is quite a bit of volatility in daily activity for this online retailer. We can smooth this out a bit by summarizing activity by month. It's important to keep in mind that December 2011 only has 9 days worth of data which will make that a shorter month with less data.
 
 # COMMAND ----------
 
@@ -205,7 +202,7 @@ display(spark.table('orders'))
 
 # COMMAND ----------
 
-# MAGIC %md For the little more than 1-year period for which we have data, we see over four-thousand unique customers (excluding customers with NULL IDs).  These customers generated about twenty-two thousand unique transactions amounting to a total of 8 million pounds:
+# MAGIC %md For the little more than 1-year period for which we have data, we see over four-thousand unique customers (excluding customers with NULL IDs).  These customers generated almost twenty-five thousand unique transactions amounting to a total over 9 million pounds:
 
 # COMMAND ----------
 
@@ -282,7 +279,7 @@ display(spark.table('orders'))
 
 # COMMAND ----------
 
-# MAGIC %md Let's look at the distirbution of the spend amounts we are seeing in these data:
+# MAGIC %md Let's look at the distribution of the spend amounts we are seeing in these data:
 
 # COMMAND ----------
 
@@ -301,7 +298,15 @@ display(spark.table('orders'))
 
 # MAGIC %md The distribution of daily spend in this narrowed range is centered around 200 to 400 pound sterling with a long-tail towards higher ranges of spend. It's clear this is not a normal (gaussian) distribution.
 # MAGIC
-# MAGIC This awareness of how spend and frequency both adhere to distributions that rapidly decline from left to right is important to understanding how the BTYD models think about the data inputs we'll provide them.  More on that later. 
+# MAGIC This awareness of how spend and frequency both adhere to distributions that rapidly decline from left to right is important to understanding how the BTYD models think about the data inputs we'll provide them.  More on that later.
+# MAGIC
+# MAGIC Now that we've explored our dataset, time to save our dataframe to use it in the next notebook.
+
+# COMMAND ----------
+
+# DBTITLE 1,Persist Dataframe for Reuse
+orders_df = spark.sql("select * from orders")
+orders_df.write.format('delta').mode('overwrite').option('overwriteSchema','true').save('/tmp/clv/orders')
 
 # COMMAND ----------
 
